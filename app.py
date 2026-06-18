@@ -28,6 +28,7 @@ def is_ausencia(nome_projeto: str) -> bool:
 def load_csv(uploaded_file) -> pd.DataFrame:
     raw = uploaded_file.read()
     encoding = "utf-8"
+    sample = ""
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             sample = raw[:4096].decode(enc)
@@ -133,14 +134,12 @@ with st.sidebar:
         label_visibility="collapsed",
     )
 
-    # Filtra clientes pelo que foi digitado
     clientes_todos = sorted(df_base["cliente"].dropna().unique().tolist())
     if busca_cliente.strip():
         clientes_match = [c for c in clientes_todos if busca_cliente.strip().lower() in c.lower()]
     else:
         clientes_match = clientes_todos
 
-    # Mostra lista dos clientes encontrados para confirmação
     if busca_cliente.strip() and clientes_match:
         st.caption(f"Encontrado(s): {', '.join(clientes_match)}")
     elif busca_cliente.strip() and not clientes_match:
@@ -148,7 +147,6 @@ with st.sidebar:
 
     st.divider()
 
-    # ── contratos filtrados pelo cliente ──
     df_proj_base = df_base[df_base["cliente"].isin(clientes_match)] if clientes_match else df_base
     projetos_disponiveis = sorted(df_proj_base["nome_projeto"].dropna().unique().tolist())
 
@@ -160,21 +158,8 @@ with st.sidebar:
     )
 
     st.divider()
-
-    modo_ordenacao = st.radio(
-        "Ordenação dentro do contrato",
-        options=["gds_gdp", "colaborador", "data", "atividade"],
-        format_func=lambda x: {
-            "gds_gdp":     "GDS / GDP (padrão)",
-            "colaborador": "Colaborador → Data",
-            "data":        "Data → Colaborador",
-            "atividade":   "Atividade → Colaborador",
-        }[x],
-        index=0,
-    )
-
-    st.divider()
     gerar = st.button("⚡ Gerar prévia", type="primary", use_container_width=True)
+    st.caption("A ordenação (GDS/GDP, Colaborador, Data, Atividade) é escolhida **dentro do relatório HTML**, sem precisar gerar de novo.")
 
 # ── aplicar filtros ───────────────────────────────────────────────────────────
 
@@ -186,7 +171,6 @@ if excluir_prodam:
 if excluir_ausencias:
     df = df[~df["nome_projeto"].apply(is_ausencia)]
 
-# Filtra clientes (só se digitou algo)
 if busca_cliente.strip() and clientes_match:
     df = df[df["cliente"].isin(clientes_match)]
 
@@ -197,18 +181,7 @@ if projetos_sel:
 gds_col = "gds" if "gds" in df.columns else ("gds_csv" if "gds_csv" in df.columns else None)
 gdp_col = "gdp" if "gdp" in df.columns else ("gdp_csv" if "gdp_csv" in df.columns else None)
 
-# Ordenação conforme escolha do usuário
-if modo_ordenacao == "colaborador":
-    sort_cols = ["nome_projeto", "nome", "data"]
-elif modo_ordenacao == "data":
-    sort_cols = ["nome_projeto", "data", "nome"]
-elif modo_ordenacao == "atividade":
-    sort_cols = ["nome_projeto", "atividade", "nome", "data"]
-else:  # gds_gdp (padrão)
-    sort_cols = ["nome_projeto"] + ([gds_col] if gds_col else []) + ["atividade", "nome", "data"]
-
-sort_cols = [c for c in sort_cols if c in df.columns]
-df = df.sort_values(sort_cols)
+df = df.sort_values(["nome_projeto", "data", "nome"])
 
 # ── preview antes de gerar ────────────────────────────────────────────────────
 
@@ -221,7 +194,7 @@ if not gerar:
     st.caption("Clique em **⚡ Gerar prévia** para montar o relatório HTML.")
     st.stop()
 
-# ── montar estrutura hierárquica ──────────────────────────────────────────────
+# ── montar lista plana de registros ───────────────────────────────────────────
 
 if df.empty:
     st.warning("Nenhum registro encontrado com os filtros aplicados.")
@@ -231,12 +204,15 @@ for col in ["ordem_servico", "tipo_demanda"]:
     if col not in df.columns:
         df[col] = ""
 
+
+def clean_val(v) -> str:
+    s = str(v).strip()
+    return "" if s.lower() in ("nan", "none", "n/d") else s
+
+
 def get_gds_gdp_label(row) -> str:
-    """Monta label combinando GDS e GDP, ex: 'GDS-3 / GDP 188772'."""
-    gds_val = str(row.get(gds_col, "")).strip() if gds_col else ""
-    gdp_val = str(row.get(gdp_col, "")).strip() if gdp_col else ""
-    gds_val = gds_val if gds_val and gds_val.lower() != "nan" else ""
-    gdp_val = gdp_val if gdp_val and gdp_val.lower() != "nan" else ""
+    gds_val = clean_val(row.get(gds_col, "")) if gds_col else ""
+    gdp_val = clean_val(row.get(gdp_col, "")) if gdp_col else ""
     if gds_val and gdp_val:
         return f"{gds_val} / GDP {gdp_val}"
     if gds_val:
@@ -245,55 +221,30 @@ def get_gds_gdp_label(row) -> str:
         return f"GDP {gdp_val}"
     return "(sem GDS/GDP)"
 
-tree = {}
+
+records = []
 for _, row in df.iterrows():
     proj   = str(row.get("nome_projeto", "")).strip() or "(sem projeto)"
     ativ   = str(row.get("atividade", "")).strip() or "—"
     titulo = str(row.get("titulo_atividade", "")).strip() or "—"
-    ativ_key = f"{ativ} — {titulo}"
     nome   = str(row.get("nome", "")).strip()
     data_fmt = row["data"].strftime("%d/%m/%Y") if pd.notna(row["data"]) else "—"
-    gds_gdp_label = get_gds_gdp_label(row)
+    # Chave de ordenação de data real (ISO) para o JS ordenar corretamente
+    data_iso = row["data"].strftime("%Y-%m-%d") if pd.notna(row["data"]) else ""
 
-    # Define o nível intermediário (2º nível da árvore) conforme o modo de ordenação
-    if modo_ordenacao == "colaborador":
-        nivel2_key = nome or "(sem nome)"
-        nivel2_label = nivel2_key
-    elif modo_ordenacao == "data":
-        nivel2_key = data_fmt
-        nivel2_label = data_fmt
-    elif modo_ordenacao == "atividade":
-        nivel2_key = ativ_key
-        nivel2_label = ativ_key
-    else:  # gds_gdp
-        nivel2_key = gds_gdp_label
-        nivel2_label = gds_gdp_label
-
-    tree.setdefault(proj, {})
-    tree[proj].setdefault(nivel2_key, {"label": nivel2_label, "atividades": {}})
-
-    # No modo gds_gdp, o 3º nível é a atividade (comportamento original).
-    # Nos demais modos, simplificamos para 1 nível abaixo do 2º (linhas direto),
-    # mas mantemos uma chave única "—" para reusar a mesma estrutura no template.
-    if modo_ordenacao == "gds_gdp":
-        nivel3_key = ativ_key
-        nivel3_meta = {"atividade": ativ, "titulo": titulo}
-    else:
-        nivel3_key = ativ_key if modo_ordenacao != "atividade" else "—"
-        nivel3_meta = {"atividade": ativ, "titulo": titulo}
-
-    tree[proj][nivel2_key]["atividades"].setdefault(
-        nivel3_key, {**nivel3_meta, "linhas": []}
-    )
-    tree[proj][nivel2_key]["atividades"][nivel3_key]["linhas"].append({
+    records.append({
+        "proj":      proj,
+        "gds_gdp":   get_gds_gdp_label(row),
+        "atividade": ativ,
+        "titulo":    titulo,
         "nome":      nome,
         "rf":        str(row.get("rf", "")).strip(),
         "data":      data_fmt,
+        "data_iso":  data_iso,
         "horas":     float(row["horas"]) if pd.notna(row["horas"]) else 0.0,
         "horas_fmt": fmt_horas(row["horas"]),
         "os":        str(row.get("ordem_servico", "")).strip(),
         "tipo":      str(row.get("tipo_demanda", "")).strip(),
-        "gds_gdp":   gds_gdp_label,
     })
 
 total_geral  = df["horas"].sum()
@@ -308,12 +259,14 @@ if not template_path.exists():
     st.stop()
 
 html_template = template_path.read_text(encoding="utf-8")
+
 try:
-    tree_json = json.dumps(tree, ensure_ascii=False, default=str, allow_nan=False)
+    records_json = json.dumps(records, ensure_ascii=False, allow_nan=False)
 except ValueError as e:
     st.error(f"Erro ao montar o relatório: dados numéricos inválidos encontrados ({e}). Verifique a coluna `horas` do CSV.")
     st.stop()
 
+# CSV bruto para exportação embutida no HTML
 csv_cols = ["nome_projeto"]
 if gds_col: csv_cols.append(gds_col)
 if gdp_col: csv_cols.append(gdp_col)
@@ -327,12 +280,12 @@ csv_str = df_export.to_csv(index=False, sep=";", encoding="utf-8")
 
 html_out = (
     html_template
-    .replace("%%PERIODO%%",        periodo_str)
-    .replace("%%GERADO_EM%%",      gerado_em)
-    .replace("%%TOTAL_HORAS%%",    fmt_horas(total_geral))
+    .replace("%%PERIODO%%",         periodo_str)
+    .replace("%%GERADO_EM%%",       gerado_em)
+    .replace("%%TOTAL_HORAS%%",     fmt_horas(total_geral))
     .replace("%%TOTAL_REGISTROS%%", str(len(df)))
-    .replace("%%TREE_JSON%%",      tree_json)
-    .replace("%%CSV_DATA%%",       json.dumps(csv_str, ensure_ascii=False))
+    .replace("%%RECORDS_JSON%%",    records_json)
+    .replace("%%CSV_DATA%%",        json.dumps(csv_str, ensure_ascii=False))
 )
 
 # ── resultado ─────────────────────────────────────────────────────────────────
@@ -352,39 +305,19 @@ st.download_button(
     type="primary",
 )
 
-nivel2_label_map = {
-    "colaborador": "Colaborador",
-    "data":        "Data",
-    "atividade":   "Atividade",
-    "gds_gdp":     "GDS/GDP",
-}
-
 st.markdown("### Prévia por contrato")
-for proj, nivel2_dict in tree.items():
-    total_proj = sum(
-        ln["horas"]
-        for n2 in nivel2_dict.values()
-        for ad in n2["atividades"].values()
-        for ln in ad["linhas"]
-    )
+for proj in df["nome_projeto"].unique():
+    df_proj = df[df["nome_projeto"] == proj]
+    total_proj = df_proj["horas"].sum()
     with st.expander(f"📁 {proj}  —  {fmt_horas(total_proj)}", expanded=False):
-        for nivel2_key, n2 in nivel2_dict.items():
-            total_n2 = sum(
-                ln["horas"]
-                for ad in n2["atividades"].values()
-                for ln in ad["linhas"]
-            )
-            st.markdown(f"**{nivel2_label_map[modo_ordenacao]}: {n2['label']}** — {fmt_horas(total_n2)}")
-            rows = []
-            for ativ_key, ad in n2["atividades"].items():
-                for ln in ad["linhas"]:
-                    rows.append({
-                        "Atividade": f"{ad['atividade']} — {ad['titulo']}" if ad.get("atividade") else ativ_key,
-                        "Nome":   ln["nome"],
-                        "RF":     ln["rf"],
-                        "Data":   ln["data"],
-                        "GDS/GDP": ln["gds_gdp"],
-                        "Horas":  ln["horas_fmt"],
-                    })
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        cols_show = ["nome", "rf", "data", "horas"]
+        if gds_col: cols_show.insert(2, gds_col)
+        if gdp_col: cols_show.insert(3, gdp_col)
+        st.dataframe(
+            df_proj[cols_show].assign(
+                data=df_proj["data"].dt.strftime("%d/%m/%Y"),
+                horas=df_proj["horas"].apply(fmt_horas),
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
