@@ -86,6 +86,13 @@ if missing:
     st.error(f"Colunas não encontradas no CSV: `{'`, `'.join(sorted(missing))}`")
     st.stop()
 
+# Reseta datas ao trocar de arquivo
+arquivo_atual = uploaded.name
+if st.session_state.get("arquivo_carregado") != arquivo_atual:
+    st.session_state["arquivo_carregado"] = arquivo_atual
+    st.session_state.pop("dt_ini", None)
+    st.session_state.pop("dt_fim", None)
+
 st.success(f"✅ {len(df_raw):,} registros carregados.")
 
 # ── sidebar — filtros ─────────────────────────────────────────────────────────
@@ -98,9 +105,11 @@ with st.sidebar:
 
     col1, col2 = st.columns(2)
     with col1:
-        dt_ini = st.date_input("De", value=data_min, min_value=data_min, max_value=data_max)
+        dt_ini = st.date_input("De", value=st.session_state.get("dt_ini", data_min),
+                               min_value=data_min, max_value=data_max, format="DD/MM/YYYY", key="dt_ini")
     with col2:
-        dt_fim = st.date_input("Até", value=data_max, min_value=data_min, max_value=data_max)
+        dt_fim = st.date_input("Até", value=st.session_state.get("dt_fim", data_max),
+                               min_value=data_min, max_value=data_max, format="DD/MM/YYYY", key="dt_fim")
 
     st.divider()
 
