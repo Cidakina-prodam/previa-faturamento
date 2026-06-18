@@ -234,6 +234,7 @@ for _, row in df.iterrows():
 
     records.append({
         "proj":      proj,
+        "contrato":  str(row.get("contrato", "")).strip(),
         "gds_gdp":   get_gds_gdp_label(row),
         "atividade": ativ,
         "titulo":    titulo,
@@ -267,7 +268,7 @@ except ValueError as e:
     st.stop()
 
 # CSV bruto para exportação embutida no HTML
-csv_cols = ["nome_projeto"]
+csv_cols = ["nome_projeto", "contrato"]
 if gds_col: csv_cols.append(gds_col)
 if gdp_col: csv_cols.append(gdp_col)
 csv_cols += ["atividade", "titulo_atividade", "nome", "rf", "data", "horas",
