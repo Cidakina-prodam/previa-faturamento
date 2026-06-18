@@ -173,7 +173,7 @@ if clientes_sel:
 if projetos_sel:
     df = df[df["nome_projeto"].isin(projetos_sel)]
 
-df = df.sort_values(["nome_projeto", "gds_csv", "atividade", "nome", "data"])
+df = df.sort_values(["nome_projeto", "gds", "atividade", "nome", "data"])
 
 # ── preview rápido ────────────────────────────────────────────────────────────
 
