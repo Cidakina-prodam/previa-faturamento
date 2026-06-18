@@ -27,12 +27,22 @@ def is_ausencia(nome_projeto: str) -> bool:
 
 
 def load_csv(uploaded_file) -> pd.DataFrame:
-    """Tenta ler o CSV com separador ; e encoding utf-8 (fallback latin-1)."""
-    try:
-        df = pd.read_csv(uploaded_file, sep=";", encoding="utf-8", dtype=str)
-    except UnicodeDecodeError:
-        uploaded_file.seek(0)
-        df = pd.read_csv(uploaded_file, sep=";", encoding="latin-1", dtype=str)
+    """Detecta separador (tab ou ;) e encoding (utf-8 / latin-1) automaticamente."""
+    raw = uploaded_file.read()
+    # detecta encoding
+    for enc in ("utf-8-sig", "utf-8", "latin-1"):
+        try:
+            sample = raw[:4096].decode(enc)
+            encoding = enc
+            break
+        except UnicodeDecodeError:
+            continue
+
+    # detecta separador
+    sep = "\t" if sample.count("\t") > sample.count(";") else ";"
+
+    import io
+    df = pd.read_csv(io.BytesIO(raw), sep=sep, encoding=encoding, dtype=str)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
     return df
 
@@ -78,7 +88,7 @@ with st.spinner("Carregando CSV…"):
     df_raw = parse_horas(df_raw)
 
 required_cols = {"nome", "rf", "cliente", "nome_projeto", "atividade",
-                 "titulo_atividade", "gds_csv", "data", "horas"}
+                 "titulo_atividade", "data", "horas"}
 missing = required_cols - set(df_raw.columns)
 if missing:
     st.error(f"Colunas não encontradas no CSV: `{'`, `'.join(sorted(missing))}`")
@@ -191,7 +201,7 @@ for col in ["ordem_servico", "tipo_demanda", "gdp_csv"]:
 tree = {}
 for _, row in df.iterrows():
     proj = str(row.get("nome_projeto", "")).strip() or "(sem projeto)"
-    gds = str(row.get("gds_csv", "")).strip() or "(sem GDS)"
+    gds = str(row.get("gds", "")).strip() or "(sem GDS)"
     ativ = str(row.get("atividade", "")).strip() or "—"
     titulo = str(row.get("titulo_atividade", "")).strip() or "—"
     ativ_key = f"{ativ} — {titulo}"
@@ -229,7 +239,7 @@ html_template = template_path.read_text(encoding="utf-8")
 tree_json = json.dumps(tree, ensure_ascii=False, default=str)
 
 # Monta CSV bruto para exportação embutida no HTML
-csv_cols = ["nome_projeto", "gds_csv", "atividade", "titulo_atividade",
+csv_cols = ["nome_projeto", "gds", "atividade", "titulo_atividade",
             "nome", "rf", "data", "horas", "ordem_servico", "tipo_demanda"]
 csv_cols_present = [c for c in csv_cols if c in df.columns]
 df_export = df[csv_cols_present].copy()
