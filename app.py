@@ -1,9 +1,9 @@
 import streamlit as st
 import pandas as pd
 import json
+import io
 from datetime import datetime, date
 from pathlib import Path
-import re
 
 st.set_page_config(
     page_title="Prévia de Faturamento — PRODAM",
@@ -14,7 +14,7 @@ st.set_page_config(
 st.title("📊 Prévia de Faturamento")
 st.caption("Visualização de lançamentos de horas por contrato — PRODAM")
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 AUSENCIA_KEYWORDS = [
     "férias", "ferias", "licença", "licenca", "afastamento",
@@ -22,14 +22,12 @@ AUSENCIA_KEYWORDS = [
 ]
 
 def is_ausencia(nome_projeto: str) -> bool:
-    nome = str(nome_projeto).lower()
-    return any(k in nome for k in AUSENCIA_KEYWORDS)
+    return any(k in str(nome_projeto).lower() for k in AUSENCIA_KEYWORDS)
 
 
 def load_csv(uploaded_file) -> pd.DataFrame:
-    """Detecta separador (tab ou ;) e encoding (utf-8 / latin-1) automaticamente."""
     raw = uploaded_file.read()
-    # detecta encoding
+    encoding = "utf-8"
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
             sample = raw[:4096].decode(enc)
@@ -37,25 +35,20 @@ def load_csv(uploaded_file) -> pd.DataFrame:
             break
         except UnicodeDecodeError:
             continue
-
-    # detecta separador
     sep = "\t" if sample.count("\t") > sample.count(";") else ";"
-
-    import io
     df = pd.read_csv(io.BytesIO(raw), sep=sep, encoding=encoding, dtype=str)
     df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
     return df
 
 
-def parse_dates(df: pd.DataFrame) -> pd.DataFrame:
+def parse_dates(df):
     df["data"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
     return df
 
 
-def parse_horas(df: pd.DataFrame) -> pd.DataFrame:
+def parse_horas(df):
     df["horas"] = (
-        df["horas"]
-        .astype(str)
+        df["horas"].astype(str)
         .str.replace(",", ".", regex=False)
         .pipe(pd.to_numeric, errors="coerce")
         .fillna(0)
@@ -75,7 +68,7 @@ def fmt_horas(h: float) -> str:
 uploaded = st.file_uploader(
     "📂 CSV de lançamentos",
     type=["csv"],
-    help="Arquivo consolidado de lançamentos (separador `;`, encoding UTF-8 ou Latin-1).",
+    help="Separador TAB ou `;`, encoding UTF-8 ou Latin-1.",
 )
 
 if not uploaded:
@@ -87,8 +80,7 @@ with st.spinner("Carregando CSV…"):
     df_raw = parse_dates(df_raw)
     df_raw = parse_horas(df_raw)
 
-required_cols = {"nome", "rf", "cliente", "nome_projeto", "atividade",
-                 "titulo_atividade", "data", "horas"}
+required_cols = {"nome", "rf", "cliente", "nome_projeto", "atividade", "titulo_atividade", "data", "horas"}
 missing = required_cols - set(df_raw.columns)
 if missing:
     st.error(f"Colunas não encontradas no CSV: `{'`, `'.join(sorted(missing))}`")
@@ -112,41 +104,50 @@ with st.sidebar:
 
     st.divider()
 
-    excluir_prodam = st.checkbox(
-        "Excluir lançamentos internos (PRODAM)",
-        value=True,
-        help="Remove registros onde `cliente == PRODAM`.",
-    )
-    excluir_ausencias = st.checkbox(
-        "Excluir ausências (férias, licenças…)",
-        value=True,
-    )
+    excluir_prodam = st.checkbox("Excluir internos PRODAM", value=True)
+    excluir_ausencias = st.checkbox("Excluir ausências (férias, licenças…)", value=True)
 
     st.divider()
 
-    # Lista de clientes (após filtro PRODAM)
-    df_sidebar = df_raw.copy()
+    # Base pré-filtrada para popular os selects
+    df_base = df_raw.copy()
     if excluir_prodam:
-        df_sidebar = df_sidebar[df_sidebar["cliente"].str.upper().ne("PRODAM")]
+        df_base = df_base[df_base["cliente"].str.upper().ne("PRODAM")]
     if excluir_ausencias:
-        df_sidebar = df_sidebar[~df_sidebar["nome_projeto"].apply(is_ausencia)]
+        df_base = df_base[~df_base["nome_projeto"].apply(is_ausencia)]
 
-    clientes_disponiveis = sorted(df_sidebar["cliente"].dropna().unique().tolist())
-    clientes_sel = st.multiselect(
-        "Cliente(s)",
-        options=clientes_disponiveis,
-        default=clientes_disponiveis,
-        help="Filtre por cliente. Deixe em branco para selecionar todos.",
+    # ── campo de texto livre para cliente ──
+    st.markdown("**Cliente**")
+    busca_cliente = st.text_input(
+        "Digite parte do nome do cliente",
+        placeholder="ex: SMSUB, SMS, SEME…",
+        label_visibility="collapsed",
     )
 
-    # Projetos filtrados pelo cliente selecionado
-    df_proj = df_sidebar[df_sidebar["cliente"].isin(clientes_sel)] if clientes_sel else df_sidebar
-    projetos_disponiveis = sorted(df_proj["nome_projeto"].dropna().unique().tolist())
+    # Filtra clientes pelo que foi digitado
+    clientes_todos = sorted(df_base["cliente"].dropna().unique().tolist())
+    if busca_cliente.strip():
+        clientes_match = [c for c in clientes_todos if busca_cliente.strip().lower() in c.lower()]
+    else:
+        clientes_match = clientes_todos
+
+    # Mostra lista dos clientes encontrados para confirmação
+    if busca_cliente.strip() and clientes_match:
+        st.caption(f"Encontrado(s): {', '.join(clientes_match)}")
+    elif busca_cliente.strip() and not clientes_match:
+        st.warning("Nenhum cliente encontrado.")
+
+    st.divider()
+
+    # ── contratos filtrados pelo cliente ──
+    df_proj_base = df_base[df_base["cliente"].isin(clientes_match)] if clientes_match else df_base
+    projetos_disponiveis = sorted(df_proj_base["nome_projeto"].dropna().unique().tolist())
+
     projetos_sel = st.multiselect(
         "Contrato / Projeto",
         options=projetos_disponiveis,
         default=projetos_disponiveis,
-        help="Filtre contratos específicos.",
+        help="Lista atualizada conforme o cliente digitado acima.",
     )
 
     st.divider()
@@ -155,35 +156,34 @@ with st.sidebar:
 # ── aplicar filtros ───────────────────────────────────────────────────────────
 
 df = df_raw.copy()
-
-# Período
 df = df[(df["data"].dt.date >= dt_ini) & (df["data"].dt.date <= dt_fim)]
 
-# PRODAM interno
 if excluir_prodam:
     df = df[df["cliente"].str.upper().ne("PRODAM")]
-
-# Ausências
 if excluir_ausencias:
     df = df[~df["nome_projeto"].apply(is_ausencia)]
 
-# Clientes e projetos
-if clientes_sel:
-    df = df[df["cliente"].isin(clientes_sel)]
+# Filtra clientes (só se digitou algo)
+if busca_cliente.strip() and clientes_match:
+    df = df[df["cliente"].isin(clientes_match)]
+
 if projetos_sel:
     df = df[df["nome_projeto"].isin(projetos_sel)]
 
-df = df.sort_values(["nome_projeto", "gds", "atividade", "nome", "data"])
+# Coluna GDS: aceita 'gds' ou 'gds_csv'
+gds_col = "gds" if "gds" in df.columns else ("gds_csv" if "gds_csv" in df.columns else None)
+sort_cols = ["nome_projeto"] + ([gds_col] if gds_col else []) + ["atividade", "nome", "data"]
+df = df.sort_values(sort_cols)
 
-# ── preview rápido ────────────────────────────────────────────────────────────
+# ── preview antes de gerar ────────────────────────────────────────────────────
 
 if not gerar:
     st.markdown("---")
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Registros filtrados", f"{len(df):,}")
-    col_b.metric("Contratos", df["nome_projeto"].nunique())
-    col_c.metric("Total de horas", fmt_horas(df["horas"].sum()))
-    st.caption("Clique em **Gerar prévia** para montar o relatório HTML.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Registros filtrados", f"{len(df):,}")
+    c2.metric("Contratos", df["nome_projeto"].nunique())
+    c3.metric("Total de horas", fmt_horas(df["horas"].sum()))
+    st.caption("Clique em **⚡ Gerar prévia** para montar o relatório HTML.")
     st.stop()
 
 # ── montar estrutura hierárquica ──────────────────────────────────────────────
@@ -192,41 +192,37 @@ if df.empty:
     st.warning("Nenhum registro encontrado com os filtros aplicados.")
     st.stop()
 
-# Preenche campos opcionais que podem estar ausentes
-for col in ["ordem_servico", "tipo_demanda", "gdp_csv"]:
+for col in ["ordem_servico", "tipo_demanda", "gdp"]:
     if col not in df.columns:
         df[col] = ""
 
-# Estrutura: { projeto: { gds: { ativ_key: { meta, linhas[] } } } }
 tree = {}
 for _, row in df.iterrows():
-    proj = str(row.get("nome_projeto", "")).strip() or "(sem projeto)"
-    gds = str(row.get("gds", "")).strip() or "(sem GDS)"
-    ativ = str(row.get("atividade", "")).strip() or "—"
+    proj  = str(row.get("nome_projeto", "")).strip() or "(sem projeto)"
+    gds   = str(row.get(gds_col, "")).strip() if gds_col else "(sem GDS)"
+    gds   = gds or "(sem GDS)"
+    ativ  = str(row.get("atividade", "")).strip() or "—"
     titulo = str(row.get("titulo_atividade", "")).strip() or "—"
     ativ_key = f"{ativ} — {titulo}"
 
     tree.setdefault(proj, {})
     tree[proj].setdefault(gds, {})
     tree[proj][gds].setdefault(ativ_key, {"atividade": ativ, "titulo": titulo, "linhas": []})
-
     tree[proj][gds][ativ_key]["linhas"].append({
-        "nome": str(row.get("nome", "")).strip(),
-        "rf": str(row.get("rf", "")).strip(),
-        "data": row["data"].strftime("%d/%m/%Y") if pd.notna(row["data"]) else "—",
-        "horas": row["horas"],
+        "nome":      str(row.get("nome", "")).strip(),
+        "rf":        str(row.get("rf", "")).strip(),
+        "data":      row["data"].strftime("%d/%m/%Y") if pd.notna(row["data"]) else "—",
+        "horas":     row["horas"],
         "horas_fmt": fmt_horas(row["horas"]),
-        "os": str(row.get("ordem_servico", "")).strip(),
-        "tipo": str(row.get("tipo_demanda", "")).strip(),
+        "os":        str(row.get("ordem_servico", "")).strip(),
+        "tipo":      str(row.get("tipo_demanda", "")).strip(),
     })
 
-# Totais
-total_geral = df["horas"].sum()
+total_geral  = df["horas"].sum()
+periodo_str  = f"{dt_ini.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}"
+gerado_em    = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-periodo_str = f"{dt_ini.strftime('%d/%m/%Y')} a {dt_fim.strftime('%d/%m/%Y')}"
-gerado_em = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-# ── carregar template HTML ────────────────────────────────────────────────────
+# ── carregar template ─────────────────────────────────────────────────────────
 
 template_path = Path(__file__).parent / "template.html"
 if not template_path.exists():
@@ -234,37 +230,34 @@ if not template_path.exists():
     st.stop()
 
 html_template = template_path.read_text(encoding="utf-8")
+tree_json     = json.dumps(tree, ensure_ascii=False, default=str)
 
-# Serializa dados para JS
-tree_json = json.dumps(tree, ensure_ascii=False, default=str)
-
-# Monta CSV bruto para exportação embutida no HTML
-csv_cols = ["nome_projeto", "gds", "atividade", "titulo_atividade",
+csv_cols = ["nome_projeto", gds_col or "gds", "atividade", "titulo_atividade",
             "nome", "rf", "data", "horas", "ordem_servico", "tipo_demanda"]
 csv_cols_present = [c for c in csv_cols if c in df.columns]
 df_export = df[csv_cols_present].copy()
-df_export["data"] = df["data"].dt.strftime("%d/%m/%Y")
+df_export["data"]  = df["data"].dt.strftime("%d/%m/%Y")
 df_export["horas"] = df["horas"].apply(lambda x: f"{x:.2f}".replace(".", ","))
 csv_str = df_export.to_csv(index=False, sep=";", encoding="utf-8")
 
 html_out = (
     html_template
-    .replace("%%PERIODO%%", periodo_str)
-    .replace("%%GERADO_EM%%", gerado_em)
-    .replace("%%TOTAL_HORAS%%", fmt_horas(total_geral))
+    .replace("%%PERIODO%%",        periodo_str)
+    .replace("%%GERADO_EM%%",      gerado_em)
+    .replace("%%TOTAL_HORAS%%",    fmt_horas(total_geral))
     .replace("%%TOTAL_REGISTROS%%", str(len(df)))
-    .replace("%%TREE_JSON%%", tree_json)
-    .replace("%%CSV_DATA%%", csv_str.replace("`", "\\`").replace("$", "\\$"))
+    .replace("%%TREE_JSON%%",      tree_json)
+    .replace("%%CSV_DATA%%",       json.dumps(csv_str, ensure_ascii=False))
 )
 
-# ── exibir resultado e download ───────────────────────────────────────────────
+# ── resultado ─────────────────────────────────────────────────────────────────
 
 st.markdown("---")
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Registros", f"{len(df):,}")
-col2.metric("Contratos", df["nome_projeto"].nunique())
-col3.metric("Colaboradores", df["rf"].nunique())
-col4.metric("Total de horas", fmt_horas(total_geral))
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Registros",      f"{len(df):,}")
+c2.metric("Contratos",      df["nome_projeto"].nunique())
+c3.metric("Colaboradores",  df["rf"].nunique())
+c4.metric("Total de horas", fmt_horas(total_geral))
 
 st.download_button(
     label="⬇️ Baixar relatório HTML",
@@ -286,17 +279,17 @@ for proj, gdss in tree.items():
         for gds, atividades in gdss.items():
             total_gds = sum(
                 ln["horas"]
-                for ativ_data in atividades.values()
-                for ln in ativ_data["linhas"]
+                for ad in atividades.values()
+                for ln in ad["linhas"]
             )
             st.markdown(f"**GDS: {gds}** — {fmt_horas(total_gds)}")
             rows = []
-            for ativ_key, ativ_data in atividades.items():
-                for ln in ativ_data["linhas"]:
+            for ativ_key, ad in atividades.items():
+                for ln in ad["linhas"]:
                     rows.append({
                         "Atividade": ativ_key,
                         "Nome": ln["nome"],
-                        "RF": ln["rf"],
+                        "RF":   ln["rf"],
                         "Data": ln["data"],
                         "Horas": ln["horas_fmt"],
                     })
