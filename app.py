@@ -223,6 +223,7 @@ for _, row in df.iterrows():
     records.append({
         "cliente":   cliente,
         "proj":      proj,
+        "cod_proj":  str(row.get("projeto", "")).strip(),
         "contrato":  str(row.get("contrato", "")).strip(),
         "gds_gdp":   get_gds_gdp_label(row),
         "atividade": ativ,
