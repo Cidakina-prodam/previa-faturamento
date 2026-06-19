@@ -182,7 +182,7 @@ if not gerar:
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Registros filtrados", f"{len(df):,}")
     c2.metric("Clientes", df["cliente"].nunique())
-    c3.metric("Contratos", df["contrato"].nunique() if "contrato" in df.columns else df["nome_projeto"].nunique())
+    c3.metric("Projetos", df["contrato"].nunique() if "contrato" in df.columns else df["nome_projeto"].nunique())
     c4.metric("Total de horas", fmt_horas(df["horas"].sum()))
     st.caption("Clique em **⚡ Gerar prévia** para montar o relatório HTML.")
     st.stop()
@@ -284,7 +284,7 @@ st.markdown("---")
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Registros",      f"{len(df):,}")
 c2.metric("Clientes",       df["cliente"].nunique())
-c3.metric("Contratos",      df["contrato"].nunique() if "contrato" in df.columns else df["nome_projeto"].nunique())
+c3.metric("Projetos",       df["contrato"].nunique() if "contrato" in df.columns else df["nome_projeto"].nunique())
 c4.metric("Total de horas", fmt_horas(total_geral))
 
 st.download_button(
